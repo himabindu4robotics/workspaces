@@ -29,13 +29,17 @@
 
 package org.firstinspires.ftc.teamcode;
 
+import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.util.ElapsedTime;
+import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
+import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
+import org.firstinspires.ftc.robotcore.external.navigation.Pose2D;
 
 /**
- * This OpMode demonstrates mecanum wheel drive control with custom motor configuration.
+ * This OpMode demonstrates mecanum wheel drive control with goBilda Pinpoint odometry.
  * 
  * Motor Configuration:
  * - RightFront: Forward direction
@@ -43,13 +47,17 @@ import com.qualcomm.robotcore.util.ElapsedTime;
  * - LeftFront: Reverse direction
  * - LeftBack: Reverse direction
  * 
+ * Odometry System:
+ * - goBilda Pinpoint encoder for precise position tracking
+ * - Real-time pose estimation (X, Y, Heading)
+ * - Coordinate-based autonomous navigation
+ * 
  * Speed is set to 0.1 (one tenth of maximum speed) for precise control.
  * 
- * The code provides basic mecanum drive movements:
- * - Forward/Backward
- * - Strafe Left/Right
- * - Rotate Left/Right
- * - Diagonal movements
+ * The code provides coordinate-based movements using Pinpoint odometry:
+ * - Precise position tracking
+ * - Coordinate-based navigation
+ * - Real-time pose feedback
  */
 
 @Autonomous(name="FTCPP Sample OpMode", group="Custom")
@@ -61,23 +69,22 @@ public class FTCPPSampleOpMode extends LinearOpMode {
     private DcMotor leftFront = null;
     private DcMotor leftBack = null;
     
+    // goBilda Pinpoint odometry sensor
+    private GoBildaPinpointDriver pinpoint = null;
+    
     private ElapsedTime runtime = new ElapsedTime();
     
     // Motor speed constant - one tenth of maximum speed
     static final double DRIVE_SPEED = 0.1;
     
-    // Position tracking variables
-    private double currentX = 0.0;  // Current X position in inches
-    private double currentY = 0.0;  // Current Y position in inches
-    private double currentHeading = 0.0;  // Current heading in degrees
+    // Position tracking using Pinpoint odometry
+    private Pose2D currentPose = new Pose2D(DistanceUnit.INCH, 0, 0, AngleUnit.DEGREES, 0);
     
-    // Movement constants for coordinate calculations
-    static final double COUNTS_PER_MOTOR_REV = 1440.0;  // Motor encoder counts per revolution
-    static final double DRIVE_GEAR_REDUCTION = 1.0;     // External gear reduction
-    static final double WHEEL_DIAMETER_INCHES = 4.0;    // Wheel diameter
-    static final double COUNTS_PER_INCH = (COUNTS_PER_MOTOR_REV * DRIVE_GEAR_REDUCTION) / 
-                                         (WHEEL_DIAMETER_INCHES * 3.1415);
-    static final double ROBOT_WIDTH_INCHES = 18.0;      // Distance between left and right wheels
+    // Movement constants for Pinpoint configuration
+    static final double PINPOINT_X_OFFSET = -3.31;     // X pod offset in inches (left positive)
+    static final double PINPOINT_Y_OFFSET = -6.61;     // Y pod offset in inches (forward positive)
+    static final double POSITION_TOLERANCE = 0.5;      // Position tolerance in inches
+    static final double HEADING_TOLERANCE = 2.0;       // Heading tolerance in degrees
     
     @Override
     public void runOpMode() {
@@ -87,6 +94,9 @@ public class FTCPPSampleOpMode extends LinearOpMode {
         rightBack = hardwareMap.get(DcMotor.class, "RightBack");
         leftFront = hardwareMap.get(DcMotor.class, "LeftFront");
         leftBack = hardwareMap.get(DcMotor.class, "LeftBack");
+        
+        // Initialize Pinpoint odometry sensor
+        pinpoint = hardwareMap.get(GoBildaPinpointDriver.class, "pinpoint");
         
         // Set motor directions according to specifications
         rightFront.setDirection(DcMotor.Direction.FORWARD);
@@ -100,26 +110,20 @@ public class FTCPPSampleOpMode extends LinearOpMode {
         leftFront.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         leftBack.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         
-        // Reset encoders for position tracking
-        rightFront.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
-        rightBack.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
-        leftFront.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
-        leftBack.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
+        // Configure Pinpoint odometry sensor
+        configurePinpoint();
         
-        rightFront.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
-        rightBack.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
-        leftFront.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
-        leftBack.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
-        
-        // Initialize position tracking
-        currentX = 0.0;
-        currentY = 0.0;
-        currentHeading = 0.0;
+        // Initialize position tracking with Pinpoint
+        currentPose = new Pose2D(DistanceUnit.INCH, 0, 0, AngleUnit.DEGREES, 0);
+        pinpoint.setPosition(currentPose);
         
         // Send telemetry message to indicate successful initialization
-        telemetry.addData("Status", "Initialized");
+        telemetry.addData("Status", "Initialized with Pinpoint Odometry");
         telemetry.addData("Drive Speed", "%.1f", DRIVE_SPEED);
-        telemetry.addData("Starting Position", "(%.1f, %.1f)", currentX, currentY);
+        telemetry.addData("Starting Position", "(%.1f, %.1f)", 
+                         currentPose.getX(DistanceUnit.INCH), 
+                         currentPose.getY(DistanceUnit.INCH));
+        telemetry.addData("Pinpoint Status", "Configured and Ready");
         telemetry.update();
         
         // Wait for the game to start (driver presses START)
@@ -129,30 +133,66 @@ public class FTCPPSampleOpMode extends LinearOpMode {
         // Run coordinate-based autonomous sequence
         if (opModeIsActive()) {
             
-            // Coordinate-based autonomous sequence
-            telemetry.addData("Path", "Starting coordinate-based autonomous sequence");
+            // Coordinate-based autonomous sequence with Pinpoint precision
+            telemetry.addData("Path", "Starting Pinpoint-guided autonomous sequence");
             telemetry.addData("Target Path", "(0,0) -> (20,20) -> (40,20)");
+            telemetry.addData("Odometry System", "goBilda Pinpoint");
+            telemetry.addData("Position Tolerance", "±%.1f inches", POSITION_TOLERANCE);
             telemetry.update();
             
-            // Robot starts at position (0,0)
-            telemetry.addData("Current Position", "(%.1f, %.1f)", currentX, currentY);
+            // Robot starts at position (0,0) - update Pinpoint position
+            pinpoint.update();
+            currentPose = pinpoint.getPosition();
+            telemetry.addData("Current Position", "(%.1f, %.1f)", 
+                             currentPose.getX(DistanceUnit.INCH), 
+                             currentPose.getY(DistanceUnit.INCH));
+            telemetry.addData("Current Heading", "%.1f°", 
+                             currentPose.getHeading(AngleUnit.DEGREES));
             telemetry.update();
             sleep(1000);
             
-            // Move to position (20,20)
+            // Move to position (20,20) - Diagonal movement
+            telemetry.addData("Waypoint 1", "Moving to (20,20)");
+            telemetry.update();
             moveToPosition(20.0, 20.0);
             
-            // Pause at waypoint
+            // Display waypoint reached information
+            pinpoint.update();
+            currentPose = pinpoint.getPosition();
+            telemetry.addData("Waypoint 1", "Reached (%.1f, %.1f)", 
+                             currentPose.getX(DistanceUnit.INCH), 
+                             currentPose.getY(DistanceUnit.INCH));
+            telemetry.addData("Heading", "%.1f°", currentPose.getHeading(AngleUnit.DEGREES));
+            telemetry.update();
             sleep(1000);
             
-            // Move to position (40,20)
+            // Move to position (40,20) - Lateral movement
+            telemetry.addData("Waypoint 2", "Moving to (40,20)");
+            telemetry.update();
             moveToPosition(40.0, 20.0);
+            
+            // Display final waypoint information
+            pinpoint.update();
+            currentPose = pinpoint.getPosition();
+            telemetry.addData("Waypoint 2", "Reached (%.1f, %.1f)", 
+                             currentPose.getX(DistanceUnit.INCH), 
+                             currentPose.getY(DistanceUnit.INCH));
+            telemetry.addData("Heading", "%.1f°", currentPose.getHeading(AngleUnit.DEGREES));
+            telemetry.update();
             
             // Stop all motors
             stopAllMotors();
             
+            // Final position update
+            pinpoint.update();
+            currentPose = pinpoint.getPosition();
+            
             telemetry.addData("Path", "Complete");
-            telemetry.addData("Final Position", "(%.1f, %.1f)", currentX, currentY);
+            telemetry.addData("Final Position", "(%.1f, %.1f)", 
+                             currentPose.getX(DistanceUnit.INCH), 
+                             currentPose.getY(DistanceUnit.INCH));
+            telemetry.addData("Final Heading", "%.1f°", 
+                             currentPose.getHeading(AngleUnit.DEGREES));
             telemetry.addData("Run Time", "%.1f seconds", runtime.seconds());
             telemetry.update();
         }
@@ -280,43 +320,59 @@ public class FTCPPSampleOpMode extends LinearOpMode {
     }
     
     /**
-     * Move robot to specified coordinate position
-     * Uses simple point-to-point movement with mecanum drive
+     * Move robot to specified coordinate position using Pinpoint odometry feedback
+     * Uses closed-loop control with real-time position feedback
      */
     public void moveToPosition(double targetX, double targetY) {
+        // Update current position from Pinpoint
+        pinpoint.update();
+        currentPose = pinpoint.getPosition();
+        
+        double startX = currentPose.getX(DistanceUnit.INCH);
+        double startY = currentPose.getY(DistanceUnit.INCH);
+        
         telemetry.addData("Movement", "Moving to (%.1f, %.1f)", targetX, targetY);
-        telemetry.addData("From", "(%.1f, %.1f)", currentX, currentY);
+        telemetry.addData("From", "(%.1f, %.1f)", startX, startY);
         telemetry.update();
         
-        // Calculate movement deltas
-        double deltaX = targetX - currentX;
-        double deltaY = targetY - currentY;
-        double distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-        
-        if (distance < 0.5) {
-            // Already at target position
-            telemetry.addData("Status", "Already at target position");
-            telemetry.update();
-            return;
-        }
-        
-        // Calculate movement time based on distance and speed
-        // Assuming 12 inches per second at DRIVE_SPEED = 0.1
-        double movementSpeed = 12.0 * DRIVE_SPEED; // inches per second
-        double movementTime = distance / movementSpeed;
-        
-        // Normalize movement vector
-        double moveX = deltaX / distance;
-        double moveY = deltaY / distance;
-        
-        // Execute movement using mecanum drive kinematics
+        // Movement loop with Pinpoint feedback
         runtime.reset();
-        while (opModeIsActive() && (runtime.seconds() < movementTime)) {
-            // Mecanum drive: combine X and Y movement
-            double frontLeftPower = moveY + moveX;
-            double frontRightPower = moveY - moveX;
-            double backLeftPower = moveY - moveX;
-            double backRightPower = moveY + moveX;
+        double maxMovementTime = 10.0; // Maximum time allowed for movement
+        
+        while (opModeIsActive() && runtime.seconds() < maxMovementTime) {
+            // Update current position from Pinpoint
+            pinpoint.update();
+            currentPose = pinpoint.getPosition();
+            
+            double currentX = currentPose.getX(DistanceUnit.INCH);
+            double currentY = currentPose.getY(DistanceUnit.INCH);
+            
+            // Calculate error (distance to target)
+            double deltaX = targetX - currentX;
+            double deltaY = targetY - currentY;
+            double distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+            
+            // Check if we've reached the target
+            if (distance < POSITION_TOLERANCE) {
+                telemetry.addData("Status", "Target reached!");
+                telemetry.addData("Final Error", "%.2f inches", distance);
+                telemetry.update();
+                break;
+            }
+            
+            // Calculate movement vector (normalized)
+            double moveX = deltaX / distance;
+            double moveY = deltaY / distance;
+            
+            // Apply proportional control - slow down as we get closer
+            double speedMultiplier = Math.min(1.0, distance / 5.0); // Slow down within 5 inches
+            speedMultiplier = Math.max(0.2, speedMultiplier); // Minimum 20% speed
+            
+            // Mecanum drive kinematics
+            double frontLeftPower = (moveY + moveX) * speedMultiplier;
+            double frontRightPower = (moveY - moveX) * speedMultiplier;
+            double backLeftPower = (moveY - moveX) * speedMultiplier;
+            double backRightPower = (moveY + moveX) * speedMultiplier;
             
             // Normalize powers to stay within [-1, 1] range
             double maxPower = Math.max(Math.max(Math.abs(frontLeftPower), Math.abs(frontRightPower)),
@@ -334,24 +390,28 @@ public class FTCPPSampleOpMode extends LinearOpMode {
             leftBack.setPower(backLeftPower * DRIVE_SPEED);
             rightBack.setPower(backRightPower * DRIVE_SPEED);
             
-            // Update telemetry
+            // Real-time telemetry with Pinpoint data
             telemetry.addData("Target", "(%.1f, %.1f)", targetX, targetY);
-            telemetry.addData("Progress", "%.1f%% (%.1fs/%.1fs)", 
-                            (runtime.seconds() / movementTime) * 100, 
-                            runtime.seconds(), movementTime);
-            telemetry.addData("Distance Remaining", "%.1f inches", 
-                            distance * (1.0 - runtime.seconds() / movementTime));
+            telemetry.addData("Current", "(%.1f, %.1f)", currentX, currentY);
+            telemetry.addData("Error", "%.2f inches", distance);
+            telemetry.addData("Speed Multiplier", "%.1f%%", speedMultiplier * 100);
+            telemetry.addData("Heading", "%.1f°", currentPose.getHeading(AngleUnit.DEGREES));
+            telemetry.addData("Runtime", "%.1f seconds", runtime.seconds());
             telemetry.update();
+            
+            sleep(20); // Small delay for stable control loop
         }
         
         // Stop motors
         stopAllMotors();
         
-        // Update current position
-        currentX = targetX;
-        currentY = targetY;
+        // Final position update
+        pinpoint.update();
+        currentPose = pinpoint.getPosition();
         
-        telemetry.addData("Movement", "Reached position (%.1f, %.1f)", currentX, currentY);
+        telemetry.addData("Movement", "Completed to (%.1f, %.1f)", 
+                         currentPose.getX(DistanceUnit.INCH), 
+                         currentPose.getY(DistanceUnit.INCH));
         telemetry.update();
         sleep(500); // Brief pause at waypoint
     }
@@ -417,15 +477,72 @@ public class FTCPPSampleOpMode extends LinearOpMode {
     }
     
     /**
-     * Update robot position based on encoder readings
-     * Simple odometry for position tracking
+     * Configure the goBilda Pinpoint odometry sensor
+     */
+    public void configurePinpoint() {
+        /*
+         * Set the odometry pod positions relative to the point that you want the position to be measured from.
+         * The X pod offset refers to how far sideways from the tracking point the X (forward) odometry pod is.
+         * Left of the center is a positive number, right of center is a negative number.
+         * The Y pod offset refers to how far forwards from the tracking point the Y (strafe) odometry pod is.
+         * Forward of center is a positive number, backwards is a negative number.
+         */
+        pinpoint.setOffsets(PINPOINT_X_OFFSET, PINPOINT_Y_OFFSET, DistanceUnit.INCH);
+        
+        /*
+         * Set the kind of pods used by your robot. Using goBILDA 4-bar odometry pods.
+         */
+        pinpoint.setEncoderResolution(GoBildaPinpointDriver.GoBildaOdometryPods.goBILDA_4_BAR_POD);
+        
+        /*
+         * Set the direction that each of the two odometry pods count. The X (forward) pod should
+         * increase when you move the robot forward. And the Y (strafe) pod should increase when
+         * you move the robot to the left.
+         */
+        pinpoint.setEncoderDirections(GoBildaPinpointDriver.EncoderDirection.FORWARD,
+                                      GoBildaPinpointDriver.EncoderDirection.FORWARD);
+        
+        /*
+         * Before running the robot, recalibrate the IMU. This needs to happen when the robot is stationary.
+         * The IMU will automatically calibrate when first powered on, but recalibrating before running
+         * the robot is a good idea to ensure that the calibration is "good".
+         * resetPosAndIMU will reset the position to 0,0,0 and also recalibrate the IMU.
+         * This is recommended before you run your autonomous, as a bad initial calibration can cause
+         * an incorrect starting value for x, y, and heading.
+         */
+        pinpoint.resetPosAndIMU();
+        
+        telemetry.addData("Pinpoint", "Configured and calibrated");
+        telemetry.update();
+    }
+    
+    /**
+     * Update robot position from Pinpoint odometry
+     * Call this method regularly to get the latest position data
      */
     public void updatePosition() {
-        // This is a simplified position update
-        // In a real implementation, you would use more sophisticated odometry
-        // incorporating all four wheel encoders and IMU data
-        
-        // For now, we'll update position based on the movement commands
-        // This is handled in the moveToPosition method
+        pinpoint.update();
+        currentPose = pinpoint.getPosition();
+    }
+    
+    /**
+     * Get current X position in inches
+     */
+    public double getCurrentX() {
+        return currentPose.getX(DistanceUnit.INCH);
+    }
+    
+    /**
+     * Get current Y position in inches
+     */
+    public double getCurrentY() {
+        return currentPose.getY(DistanceUnit.INCH);
+    }
+    
+    /**
+     * Get current heading in degrees
+     */
+    public double getCurrentHeading() {
+        return currentPose.getHeading(AngleUnit.DEGREES);
     }
 }
