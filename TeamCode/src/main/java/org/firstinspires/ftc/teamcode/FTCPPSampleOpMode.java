@@ -29,6 +29,10 @@
 
 package org.firstinspires.ftc.teamcode;
 
+import com.acmerobotics.roadrunner.geometry.Pose2d;
+import com.acmerobotics.roadrunner.geometry.Vector2d;
+import com.acmerobotics.roadrunner.trajectory.Trajectory;
+import com.acmerobotics.roadrunner.trajectory.TrajectoryBuilder;
 import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
@@ -37,9 +41,10 @@ import com.qualcomm.robotcore.util.ElapsedTime;
 import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.Pose2D;
+import org.firstinspires.ftc.teamcode.drive.PinpointMecanumDrive;
 
 /**
- * This OpMode demonstrates mecanum wheel drive control with goBilda Pinpoint odometry.
+ * This OpMode demonstrates Road Runner trajectory following with goBilda Pinpoint odometry.
  * 
  * Motor Configuration:
  * - RightFront: Forward direction
@@ -47,502 +52,276 @@ import org.firstinspires.ftc.robotcore.external.navigation.Pose2D;
  * - LeftFront: Reverse direction
  * - LeftBack: Reverse direction
  * 
- * Odometry System:
- * - goBilda Pinpoint encoder for precise position tracking
- * - Real-time pose estimation (X, Y, Heading)
- * - Coordinate-based autonomous navigation
+ * Advanced Navigation System:
+ * - Road Runner trajectory planning and following
+ * - goBilda Pinpoint encoder for precise position feedback
+ * - Smooth spline-based paths with velocity profiles
+ * - Advanced motion control with PID feedback
  * 
- * Speed is set to 0.1 (one tenth of maximum speed) for precise control.
- * 
- * The code provides coordinate-based movements using Pinpoint odometry:
- * - Precise position tracking
- * - Coordinate-based navigation
- * - Real-time pose feedback
+ * The code provides sophisticated autonomous navigation:
+ * - Spline trajectory generation
+ * - Velocity and acceleration constraints
+ * - Real-time trajectory following
+ * - Precise waypoint navigation
  */
 
-@Autonomous(name="FTCPP Sample OpMode", group="Custom")
+@Autonomous(name="FTCPP Road Runner + Pinpoint", group="Advanced")
 public class FTCPPSampleOpMode extends LinearOpMode {
 
     /* Declare OpMode members */
-    private DcMotor rightFront = null;
-    private DcMotor rightBack = null;
-    private DcMotor leftFront = null;
-    private DcMotor leftBack = null;
-    
-    // goBilda Pinpoint odometry sensor
-    private GoBildaPinpointDriver pinpoint = null;
-    
+    private PinpointMecanumDrive drive;
     private ElapsedTime runtime = new ElapsedTime();
     
-    // Motor speed constant - one tenth of maximum speed
-    static final double DRIVE_SPEED = 0.1;
-    
-    // Position tracking using Pinpoint odometry
-    private Pose2D currentPose = new Pose2D(DistanceUnit.INCH, 0, 0, AngleUnit.DEGREES, 0);
-    
-    // Movement constants for Pinpoint configuration
-    static final double PINPOINT_X_OFFSET = -3.31;     // X pod offset in inches (left positive)
-    static final double PINPOINT_Y_OFFSET = -6.61;     // Y pod offset in inches (forward positive)
+    // Road Runner trajectory constants
+    static final double TRAJECTORY_TIMEOUT = 30.0;     // Maximum time for trajectory execution
     static final double POSITION_TOLERANCE = 0.5;      // Position tolerance in inches
-    static final double HEADING_TOLERANCE = 2.0;       // Heading tolerance in degrees
+    static final double HEADING_TOLERANCE = Math.toRadians(2.0); // Heading tolerance in radians
     
     @Override
     public void runOpMode() {
         
-        // Initialize the drive system variables
-        rightFront = hardwareMap.get(DcMotor.class, "RightFront");
-        rightBack = hardwareMap.get(DcMotor.class, "RightBack");
-        leftFront = hardwareMap.get(DcMotor.class, "LeftFront");
-        leftBack = hardwareMap.get(DcMotor.class, "LeftBack");
+        // Initialize Road Runner drive with Pinpoint odometry
+        drive = new PinpointMecanumDrive(hardwareMap);
         
-        // Initialize Pinpoint odometry sensor
-        pinpoint = hardwareMap.get(GoBildaPinpointDriver.class, "pinpoint");
-        
-        // Set motor directions according to specifications
-        rightFront.setDirection(DcMotor.Direction.FORWARD);
-        rightBack.setDirection(DcMotor.Direction.FORWARD);
-        leftFront.setDirection(DcMotor.Direction.REVERSE);
-        leftBack.setDirection(DcMotor.Direction.REVERSE);
-        
-        // Set motors to brake when zero power is applied
-        rightFront.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
-        rightBack.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
-        leftFront.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
-        leftBack.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
-        
-        // Configure Pinpoint odometry sensor
-        configurePinpoint();
-        
-        // Initialize position tracking with Pinpoint
-        currentPose = new Pose2D(DistanceUnit.INCH, 0, 0, AngleUnit.DEGREES, 0);
-        pinpoint.setPosition(currentPose);
+        // Set starting pose
+        Pose2d startPose = new Pose2d(0, 0, 0);
+        drive.setPoseEstimate(startPose);
         
         // Send telemetry message to indicate successful initialization
-        telemetry.addData("Status", "Initialized with Pinpoint Odometry");
-        telemetry.addData("Drive Speed", "%.1f", DRIVE_SPEED);
+        telemetry.addData("Status", "Initialized with Road Runner + Pinpoint");
         telemetry.addData("Starting Position", "(%.1f, %.1f)", 
-                         currentPose.getX(DistanceUnit.INCH), 
-                         currentPose.getY(DistanceUnit.INCH));
-        telemetry.addData("Pinpoint Status", "Configured and Ready");
+                         startPose.getX(), startPose.getY());
+        telemetry.addData("Starting Heading", "%.1f°", Math.toDegrees(startPose.getHeading()));
+        telemetry.addData("Road Runner", "Ready for trajectory execution");
         telemetry.update();
         
         // Wait for the game to start (driver presses START)
         waitForStart();
         runtime.reset();
         
-        // Run coordinate-based autonomous sequence
+        // Build Road Runner trajectories for the path (0,0) -> (20,20) -> (40,20)
         if (opModeIsActive()) {
             
-            // Coordinate-based autonomous sequence with Pinpoint precision
-            telemetry.addData("Path", "Starting Pinpoint-guided autonomous sequence");
+            telemetry.addData("Path", "Building Road Runner trajectories");
             telemetry.addData("Target Path", "(0,0) -> (20,20) -> (40,20)");
-            telemetry.addData("Odometry System", "goBilda Pinpoint");
-            telemetry.addData("Position Tolerance", "±%.1f inches", POSITION_TOLERANCE);
+            telemetry.addData("Navigation System", "Road Runner + Pinpoint Odometry");
             telemetry.update();
             
-            // Robot starts at position (0,0) - update Pinpoint position
-            pinpoint.update();
-            currentPose = pinpoint.getPosition();
-            telemetry.addData("Current Position", "(%.1f, %.1f)", 
-                             currentPose.getX(DistanceUnit.INCH), 
-                             currentPose.getY(DistanceUnit.INCH));
-            telemetry.addData("Current Heading", "%.1f°", 
-                             currentPose.getHeading(AngleUnit.DEGREES));
+            // Build trajectory from (0,0) to (20,20) - Diagonal movement with spline
+            Trajectory trajectory1 = drive.trajectoryBuilder(startPose)
+                    .splineTo(new Vector2d(20, 20), 0) // Smooth spline to (20,20) with 0 heading
+                    .build();
+            
+            // Build trajectory from (20,20) to (40,20) - Lateral movement
+            Trajectory trajectory2 = drive.trajectoryBuilder(trajectory1.end())
+                    .lineToLinearHeading(new Pose2d(40, 20, 0)) // Linear movement maintaining heading
+                    .build();
+            
+            telemetry.addData("Trajectories", "Built successfully");
+            telemetry.addData("Trajectory 1", "Spline to (20,20)");
+            telemetry.addData("Trajectory 2", "Linear to (40,20)");
             telemetry.update();
             sleep(1000);
             
-            // Move to position (20,20) - Diagonal movement
-            telemetry.addData("Waypoint 1", "Moving to (20,20)");
+            // Execute first trajectory: (0,0) -> (20,20)
+            telemetry.addData("Executing", "Trajectory 1: Spline to (20,20)");
             telemetry.update();
-            moveToPosition(20.0, 20.0);
             
-            // Display waypoint reached information
-            pinpoint.update();
-            currentPose = pinpoint.getPosition();
+            drive.followTrajectory(trajectory1);
+            
+            // Wait for trajectory to complete with real-time feedback
+            while (opModeIsActive() && drive.isFollowingTrajectory()) {
+                drive.update();
+                
+                Pose2d currentPose = drive.getPoseEstimate();
+                Pose2d error = drive.getLastError();
+                
+                telemetry.addData("Status", "Following Trajectory 1");
+                telemetry.addData("Current Position", "(%.1f, %.1f)", 
+                                 currentPose.getX(), currentPose.getY());
+                telemetry.addData("Current Heading", "%.1f°", 
+                                 Math.toDegrees(currentPose.getHeading()));
+                telemetry.addData("Position Error", "%.2f inches", 
+                                 Math.sqrt(error.getX() * error.getX() + error.getY() * error.getY()));
+                telemetry.addData("Heading Error", "%.1f°", 
+                                 Math.toDegrees(error.getHeading()));
+                telemetry.update();
+            }
+            
+            // Display waypoint 1 reached
+            Pose2d waypoint1Pose = drive.getPoseEstimate();
             telemetry.addData("Waypoint 1", "Reached (%.1f, %.1f)", 
-                             currentPose.getX(DistanceUnit.INCH), 
-                             currentPose.getY(DistanceUnit.INCH));
-            telemetry.addData("Heading", "%.1f°", currentPose.getHeading(AngleUnit.DEGREES));
+                             waypoint1Pose.getX(), waypoint1Pose.getY());
+            telemetry.addData("Heading", "%.1f°", Math.toDegrees(waypoint1Pose.getHeading()));
             telemetry.update();
             sleep(1000);
             
-            // Move to position (40,20) - Lateral movement
-            telemetry.addData("Waypoint 2", "Moving to (40,20)");
-            telemetry.update();
-            moveToPosition(40.0, 20.0);
-            
-            // Display final waypoint information
-            pinpoint.update();
-            currentPose = pinpoint.getPosition();
-            telemetry.addData("Waypoint 2", "Reached (%.1f, %.1f)", 
-                             currentPose.getX(DistanceUnit.INCH), 
-                             currentPose.getY(DistanceUnit.INCH));
-            telemetry.addData("Heading", "%.1f°", currentPose.getHeading(AngleUnit.DEGREES));
+            // Execute second trajectory: (20,20) -> (40,20)
+            telemetry.addData("Executing", "Trajectory 2: Linear to (40,20)");
             telemetry.update();
             
-            // Stop all motors
-            stopAllMotors();
+            drive.followTrajectory(trajectory2);
             
-            // Final position update
-            pinpoint.update();
-            currentPose = pinpoint.getPosition();
+            // Wait for trajectory to complete with real-time feedback
+            while (opModeIsActive() && drive.isFollowingTrajectory()) {
+                drive.update();
+                
+                Pose2d currentPose = drive.getPoseEstimate();
+                Pose2d error = drive.getLastError();
+                
+                telemetry.addData("Status", "Following Trajectory 2");
+                telemetry.addData("Current Position", "(%.1f, %.1f)", 
+                                 currentPose.getX(), currentPose.getY());
+                telemetry.addData("Current Heading", "%.1f°", 
+                                 Math.toDegrees(currentPose.getHeading()));
+                telemetry.addData("Position Error", "%.2f inches", 
+                                 Math.sqrt(error.getX() * error.getX() + error.getY() * error.getY()));
+                telemetry.addData("Heading Error", "%.1f°", 
+                                 Math.toDegrees(error.getHeading()));
+                telemetry.update();
+            }
             
-            telemetry.addData("Path", "Complete");
+            // Final position and completion
+            Pose2d finalPose = drive.getPoseEstimate();
+            
+            telemetry.addData("Path", "Complete - Road Runner Trajectories Executed");
             telemetry.addData("Final Position", "(%.1f, %.1f)", 
-                             currentPose.getX(DistanceUnit.INCH), 
-                             currentPose.getY(DistanceUnit.INCH));
+                             finalPose.getX(), finalPose.getY());
             telemetry.addData("Final Heading", "%.1f°", 
-                             currentPose.getHeading(AngleUnit.DEGREES));
-            telemetry.addData("Run Time", "%.1f seconds", runtime.seconds());
+                             Math.toDegrees(finalPose.getHeading()));
+            telemetry.addData("Total Run Time", "%.1f seconds", runtime.seconds());
+            telemetry.addData("Navigation", "Road Runner + Pinpoint Odometry");
             telemetry.update();
         }
     }
     
     /**
-     * Drive forward using mecanum wheels
+     * Execute a Road Runner trajectory with timeout safety
      */
-    public void driveForward(double timeoutS) {
+    public void executeTrajectory(Trajectory trajectory, String description) {
+        telemetry.addData("Executing", description);
+        telemetry.update();
+        
+        drive.followTrajectory(trajectory);
+        
         runtime.reset();
-        while (opModeIsActive() && (runtime.seconds() < timeoutS)) {
-            rightFront.setPower(DRIVE_SPEED);
-            rightBack.setPower(DRIVE_SPEED);
-            leftFront.setPower(DRIVE_SPEED);
-            leftBack.setPower(DRIVE_SPEED);
+        while (opModeIsActive() && drive.isFollowingTrajectory() && runtime.seconds() < TRAJECTORY_TIMEOUT) {
+            drive.update();
             
-            telemetry.addData("Action", "Driving Forward");
-            telemetry.addData("Time", "%.1f seconds", runtime.seconds());
+            Pose2d currentPose = drive.getPoseEstimate();
+            Pose2d error = drive.getLastError();
+            
+            telemetry.addData("Status", description);
+            telemetry.addData("Current Position", "(%.1f, %.1f)", 
+                             currentPose.getX(), currentPose.getY());
+            telemetry.addData("Current Heading", "%.1f°", 
+                             Math.toDegrees(currentPose.getHeading()));
+            telemetry.addData("Position Error", "%.2f inches", 
+                             Math.sqrt(error.getX() * error.getX() + error.getY() * error.getY()));
+            telemetry.addData("Heading Error", "%.1f°", 
+                             Math.toDegrees(error.getHeading()));
+            telemetry.addData("Runtime", "%.1f seconds", runtime.seconds());
             telemetry.update();
         }
-        stopAllMotors();
+        
+        // Ensure trajectory is stopped if timeout occurred
+        if (runtime.seconds() >= TRAJECTORY_TIMEOUT) {
+            drive.setMotorPowers(0, 0, 0, 0);
+            telemetry.addData("Warning", "Trajectory timeout - stopped motors");
+            telemetry.update();
+        }
     }
     
     /**
-     * Drive backward using mecanum wheels
+     * Build a spline trajectory to a target position
      */
-    public void driveBackward(double timeoutS) {
-        runtime.reset();
-        while (opModeIsActive() && (runtime.seconds() < timeoutS)) {
-            rightFront.setPower(-DRIVE_SPEED);
-            rightBack.setPower(-DRIVE_SPEED);
-            leftFront.setPower(-DRIVE_SPEED);
-            leftBack.setPower(-DRIVE_SPEED);
-            
-            telemetry.addData("Action", "Driving Backward");
-            telemetry.addData("Time", "%.1f seconds", runtime.seconds());
-            telemetry.update();
-        }
-        stopAllMotors();
+    public Trajectory buildSplineTrajectory(Pose2d startPose, Vector2d targetPosition, double targetHeading) {
+        return drive.trajectoryBuilder(startPose)
+                .splineTo(targetPosition, targetHeading)
+                .build();
     }
     
     /**
-     * Strafe right using mecanum wheels
+     * Build a linear trajectory to a target pose
      */
-    public void strafeRight(double timeoutS) {
-        runtime.reset();
-        while (opModeIsActive() && (runtime.seconds() < timeoutS)) {
-            rightFront.setPower(-DRIVE_SPEED);
-            rightBack.setPower(DRIVE_SPEED);
-            leftFront.setPower(DRIVE_SPEED);
-            leftBack.setPower(-DRIVE_SPEED);
-            
-            telemetry.addData("Action", "Strafing Right");
-            telemetry.addData("Time", "%.1f seconds", runtime.seconds());
-            telemetry.update();
-        }
-        stopAllMotors();
+    public Trajectory buildLinearTrajectory(Pose2d startPose, Pose2d targetPose) {
+        return drive.trajectoryBuilder(startPose)
+                .lineToLinearHeading(targetPose)
+                .build();
     }
     
     /**
-     * Strafe left using mecanum wheels
+     * Get current robot pose from Road Runner
      */
-    public void strafeLeft(double timeoutS) {
-        runtime.reset();
-        while (opModeIsActive() && (runtime.seconds() < timeoutS)) {
-            rightFront.setPower(DRIVE_SPEED);
-            rightBack.setPower(-DRIVE_SPEED);
-            leftFront.setPower(-DRIVE_SPEED);
-            leftBack.setPower(DRIVE_SPEED);
-            
-            telemetry.addData("Action", "Strafing Left");
-            telemetry.addData("Time", "%.1f seconds", runtime.seconds());
-            telemetry.update();
-        }
-        stopAllMotors();
+    public Pose2d getCurrentPose() {
+        return drive.getPoseEstimate();
     }
     
     /**
-     * Rotate left (counter-clockwise) using mecanum wheels
-     */
-    public void rotateLeft(double timeoutS) {
-        runtime.reset();
-        while (opModeIsActive() && (runtime.seconds() < timeoutS)) {
-            rightFront.setPower(DRIVE_SPEED);
-            rightBack.setPower(DRIVE_SPEED);
-            leftFront.setPower(-DRIVE_SPEED);
-            leftBack.setPower(-DRIVE_SPEED);
-            
-            telemetry.addData("Action", "Rotating Left");
-            telemetry.addData("Time", "%.1f seconds", runtime.seconds());
-            telemetry.update();
-        }
-        stopAllMotors();
-    }
-    
-    /**
-     * Rotate right (clockwise) using mecanum wheels
-     */
-    public void rotateRight(double timeoutS) {
-        runtime.reset();
-        while (opModeIsActive() && (runtime.seconds() < timeoutS)) {
-            rightFront.setPower(-DRIVE_SPEED);
-            rightBack.setPower(-DRIVE_SPEED);
-            leftFront.setPower(DRIVE_SPEED);
-            leftBack.setPower(DRIVE_SPEED);
-            
-            telemetry.addData("Action", "Rotating Right");
-            telemetry.addData("Time", "%.1f seconds", runtime.seconds());
-            telemetry.update();
-        }
-        stopAllMotors();
-    }
-    
-    /**
-     * Stop all motors
+     * Stop all drive motors
      */
     public void stopAllMotors() {
-        rightFront.setPower(0);
-        rightBack.setPower(0);
-        leftFront.setPower(0);
-        leftBack.setPower(0);
-        
-        // Brief pause to ensure motors stop
+        drive.setMotorPowers(0, 0, 0, 0);
         sleep(100);
     }
     
     /**
-     * Move robot to specified coordinate position using Pinpoint odometry feedback
-     * Uses closed-loop control with real-time position feedback
+     * Create a complex trajectory sequence with multiple waypoints
      */
-    public void moveToPosition(double targetX, double targetY) {
-        // Update current position from Pinpoint
-        pinpoint.update();
-        currentPose = pinpoint.getPosition();
+    public void executeComplexPath() {
+        Pose2d startPose = drive.getPoseEstimate();
         
-        double startX = currentPose.getX(DistanceUnit.INCH);
-        double startY = currentPose.getY(DistanceUnit.INCH);
+        // Build a complex trajectory with splines and linear segments
+        Trajectory complexTrajectory = drive.trajectoryBuilder(startPose)
+                .splineTo(new Vector2d(10, 10), Math.toRadians(45))  // Curved approach
+                .splineTo(new Vector2d(20, 20), Math.toRadians(0))   // Smooth curve to waypoint 1
+                .lineToLinearHeading(new Pose2d(40, 20, Math.toRadians(0))) // Linear to final point
+                .build();
         
-        telemetry.addData("Movement", "Moving to (%.1f, %.1f)", targetX, targetY);
-        telemetry.addData("From", "(%.1f, %.1f)", startX, startY);
-        telemetry.update();
-        
-        // Movement loop with Pinpoint feedback
-        runtime.reset();
-        double maxMovementTime = 10.0; // Maximum time allowed for movement
-        
-        while (opModeIsActive() && runtime.seconds() < maxMovementTime) {
-            // Update current position from Pinpoint
-            pinpoint.update();
-            currentPose = pinpoint.getPosition();
-            
-            double currentX = currentPose.getX(DistanceUnit.INCH);
-            double currentY = currentPose.getY(DistanceUnit.INCH);
-            
-            // Calculate error (distance to target)
-            double deltaX = targetX - currentX;
-            double deltaY = targetY - currentY;
-            double distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-            
-            // Check if we've reached the target
-            if (distance < POSITION_TOLERANCE) {
-                telemetry.addData("Status", "Target reached!");
-                telemetry.addData("Final Error", "%.2f inches", distance);
-                telemetry.update();
-                break;
-            }
-            
-            // Calculate movement vector (normalized)
-            double moveX = deltaX / distance;
-            double moveY = deltaY / distance;
-            
-            // Apply proportional control - slow down as we get closer
-            double speedMultiplier = Math.min(1.0, distance / 5.0); // Slow down within 5 inches
-            speedMultiplier = Math.max(0.2, speedMultiplier); // Minimum 20% speed
-            
-            // Mecanum drive kinematics
-            double frontLeftPower = (moveY + moveX) * speedMultiplier;
-            double frontRightPower = (moveY - moveX) * speedMultiplier;
-            double backLeftPower = (moveY - moveX) * speedMultiplier;
-            double backRightPower = (moveY + moveX) * speedMultiplier;
-            
-            // Normalize powers to stay within [-1, 1] range
-            double maxPower = Math.max(Math.max(Math.abs(frontLeftPower), Math.abs(frontRightPower)),
-                                     Math.max(Math.abs(backLeftPower), Math.abs(backRightPower)));
-            if (maxPower > 1.0) {
-                frontLeftPower /= maxPower;
-                frontRightPower /= maxPower;
-                backLeftPower /= maxPower;
-                backRightPower /= maxPower;
-            }
-            
-            // Apply drive speed scaling
-            leftFront.setPower(frontLeftPower * DRIVE_SPEED);
-            rightFront.setPower(frontRightPower * DRIVE_SPEED);
-            leftBack.setPower(backLeftPower * DRIVE_SPEED);
-            rightBack.setPower(backRightPower * DRIVE_SPEED);
-            
-            // Real-time telemetry with Pinpoint data
-            telemetry.addData("Target", "(%.1f, %.1f)", targetX, targetY);
-            telemetry.addData("Current", "(%.1f, %.1f)", currentX, currentY);
-            telemetry.addData("Error", "%.2f inches", distance);
-            telemetry.addData("Speed Multiplier", "%.1f%%", speedMultiplier * 100);
-            telemetry.addData("Heading", "%.1f°", currentPose.getHeading(AngleUnit.DEGREES));
-            telemetry.addData("Runtime", "%.1f seconds", runtime.seconds());
-            telemetry.update();
-            
-            sleep(20); // Small delay for stable control loop
-        }
-        
-        // Stop motors
-        stopAllMotors();
-        
-        // Final position update
-        pinpoint.update();
-        currentPose = pinpoint.getPosition();
-        
-        telemetry.addData("Movement", "Completed to (%.1f, %.1f)", 
-                         currentPose.getX(DistanceUnit.INCH), 
-                         currentPose.getY(DistanceUnit.INCH));
-        telemetry.update();
-        sleep(500); // Brief pause at waypoint
+        executeTrajectory(complexTrajectory, "Complex Multi-Waypoint Path");
     }
     
     /**
-     * Move robot by specified distance using encoders
-     * More precise than time-based movement
+     * Demonstrate advanced Road Runner trajectory features
      */
-    public void moveByDistance(double distanceInches, double direction) {
-        // Calculate target encoder counts
-        int targetCounts = (int)(distanceInches * COUNTS_PER_INCH);
+    public void demonstrateAdvancedFeatures() {
+        Pose2d currentPose = drive.getPoseEstimate();
         
-        // Get current encoder positions
-        int startLeftFront = leftFront.getCurrentPosition();
-        int startRightFront = rightFront.getCurrentPosition();
-        int startLeftBack = leftBack.getCurrentPosition();
-        int startRightBack = rightBack.getCurrentPosition();
+        // Example of trajectory with velocity and acceleration constraints
+        Trajectory constrainedTrajectory = drive.trajectoryBuilder(currentPose)
+                .splineTo(new Vector2d(currentPose.getX() + 12, currentPose.getY() + 12), 0)
+                .build();
         
-        // Calculate target positions
-        int targetLeftFront = startLeftFront + (int)(targetCounts * Math.sin(Math.toRadians(direction + 45)));
-        int targetRightFront = startRightFront + (int)(targetCounts * Math.sin(Math.toRadians(direction - 45)));
-        int targetLeftBack = startLeftBack + (int)(targetCounts * Math.sin(Math.toRadians(direction - 45)));
-        int targetRightBack = startRightBack + (int)(targetCounts * Math.sin(Math.toRadians(direction + 45)));
+        telemetry.addData("Demo", "Advanced trajectory with constraints");
+        telemetry.update();
         
-        // Set target positions
-        leftFront.setTargetPosition(targetLeftFront);
-        rightFront.setTargetPosition(targetRightFront);
-        leftBack.setTargetPosition(targetLeftBack);
-        rightBack.setTargetPosition(targetRightBack);
-        
-        // Switch to RUN_TO_POSITION mode
-        leftFront.setMode(DcMotor.RunMode.RUN_TO_POSITION);
-        rightFront.setMode(DcMotor.RunMode.RUN_TO_POSITION);
-        leftBack.setMode(DcMotor.RunMode.RUN_TO_POSITION);
-        rightBack.setMode(DcMotor.RunMode.RUN_TO_POSITION);
-        
-        // Start movement
-        leftFront.setPower(DRIVE_SPEED);
-        rightFront.setPower(DRIVE_SPEED);
-        leftBack.setPower(DRIVE_SPEED);
-        rightBack.setPower(DRIVE_SPEED);
-        
-        // Wait for movement to complete
-        while (opModeIsActive() && 
-               (leftFront.isBusy() || rightFront.isBusy() || leftBack.isBusy() || rightBack.isBusy())) {
-            
-            telemetry.addData("Moving", "Distance: %.1f inches, Direction: %.1f°", 
-                            distanceInches, direction);
-            telemetry.addData("Encoders", "LF:%d RF:%d LB:%d RB:%d",
-                            leftFront.getCurrentPosition(),
-                            rightFront.getCurrentPosition(),
-                            leftBack.getCurrentPosition(),
-                            rightBack.getCurrentPosition());
-            telemetry.update();
-        }
-        
-        // Stop motors and return to RUN_USING_ENCODER mode
-        stopAllMotors();
-        leftFront.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
-        rightFront.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
-        leftBack.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
-        rightBack.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+        executeTrajectory(constrainedTrajectory, "Constrained Velocity Trajectory");
     }
     
     /**
-     * Configure the goBilda Pinpoint odometry sensor
+     * Display comprehensive telemetry about the robot's state
      */
-    public void configurePinpoint() {
-        /*
-         * Set the odometry pod positions relative to the point that you want the position to be measured from.
-         * The X pod offset refers to how far sideways from the tracking point the X (forward) odometry pod is.
-         * Left of the center is a positive number, right of center is a negative number.
-         * The Y pod offset refers to how far forwards from the tracking point the Y (strafe) odometry pod is.
-         * Forward of center is a positive number, backwards is a negative number.
-         */
-        pinpoint.setOffsets(PINPOINT_X_OFFSET, PINPOINT_Y_OFFSET, DistanceUnit.INCH);
+    public void displayRobotStatus() {
+        Pose2d currentPose = drive.getPoseEstimate();
+        Pose2d lastError = drive.getLastError();
         
-        /*
-         * Set the kind of pods used by your robot. Using goBILDA 4-bar odometry pods.
-         */
-        pinpoint.setEncoderResolution(GoBildaPinpointDriver.GoBildaOdometryPods.goBILDA_4_BAR_POD);
-        
-        /*
-         * Set the direction that each of the two odometry pods count. The X (forward) pod should
-         * increase when you move the robot forward. And the Y (strafe) pod should increase when
-         * you move the robot to the left.
-         */
-        pinpoint.setEncoderDirections(GoBildaPinpointDriver.EncoderDirection.FORWARD,
-                                      GoBildaPinpointDriver.EncoderDirection.FORWARD);
-        
-        /*
-         * Before running the robot, recalibrate the IMU. This needs to happen when the robot is stationary.
-         * The IMU will automatically calibrate when first powered on, but recalibrating before running
-         * the robot is a good idea to ensure that the calibration is "good".
-         * resetPosAndIMU will reset the position to 0,0,0 and also recalibrate the IMU.
-         * This is recommended before you run your autonomous, as a bad initial calibration can cause
-         * an incorrect starting value for x, y, and heading.
-         */
-        pinpoint.resetPosAndIMU();
-        
-        telemetry.addData("Pinpoint", "Configured and calibrated");
+        telemetry.addData("=== ROBOT STATUS ===", "");
+        telemetry.addData("Position", "(%.1f, %.1f)", currentPose.getX(), currentPose.getY());
+        telemetry.addData("Heading", "%.1f°", Math.toDegrees(currentPose.getHeading()));
+        telemetry.addData("Position Error", "%.2f inches", 
+                         Math.sqrt(lastError.getX() * lastError.getX() + lastError.getY() * lastError.getY()));
+        telemetry.addData("Heading Error", "%.1f°", Math.toDegrees(lastError.getHeading()));
+        telemetry.addData("Following Trajectory", drive.isFollowingTrajectory() ? "Yes" : "No");
+        telemetry.addData("Navigation System", "Road Runner + Pinpoint");
         telemetry.update();
     }
     
     /**
-     * Update robot position from Pinpoint odometry
-     * Call this method regularly to get the latest position data
+     * Reset robot pose to origin
      */
-    public void updatePosition() {
-        pinpoint.update();
-        currentPose = pinpoint.getPosition();
-    }
-    
-    /**
-     * Get current X position in inches
-     */
-    public double getCurrentX() {
-        return currentPose.getX(DistanceUnit.INCH);
-    }
-    
-    /**
-     * Get current Y position in inches
-     */
-    public double getCurrentY() {
-        return currentPose.getY(DistanceUnit.INCH);
-    }
-    
-    /**
-     * Get current heading in degrees
-     */
-    public double getCurrentHeading() {
-        return currentPose.getHeading(AngleUnit.DEGREES);
+    public void resetPose() {
+        drive.setPoseEstimate(new Pose2d(0, 0, 0));
+        telemetry.addData("Reset", "Robot pose reset to origin");
+        telemetry.update();
     }
 }
