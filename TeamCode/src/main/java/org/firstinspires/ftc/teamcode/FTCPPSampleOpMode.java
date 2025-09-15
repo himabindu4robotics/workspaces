@@ -66,6 +66,19 @@ public class FTCPPSampleOpMode extends LinearOpMode {
     // Motor speed constant - one tenth of maximum speed
     static final double DRIVE_SPEED = 0.1;
     
+    // Position tracking variables
+    private double currentX = 0.0;  // Current X position in inches
+    private double currentY = 0.0;  // Current Y position in inches
+    private double currentHeading = 0.0;  // Current heading in degrees
+    
+    // Movement constants for coordinate calculations
+    static final double COUNTS_PER_MOTOR_REV = 1440.0;  // Motor encoder counts per revolution
+    static final double DRIVE_GEAR_REDUCTION = 1.0;     // External gear reduction
+    static final double WHEEL_DIAMETER_INCHES = 4.0;    // Wheel diameter
+    static final double COUNTS_PER_INCH = (COUNTS_PER_MOTOR_REV * DRIVE_GEAR_REDUCTION) / 
+                                         (WHEEL_DIAMETER_INCHES * 3.1415);
+    static final double ROBOT_WIDTH_INCHES = 18.0;      // Distance between left and right wheels
+    
     @Override
     public void runOpMode() {
         
@@ -87,41 +100,59 @@ public class FTCPPSampleOpMode extends LinearOpMode {
         leftFront.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         leftBack.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         
+        // Reset encoders for position tracking
+        rightFront.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
+        rightBack.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
+        leftFront.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
+        leftBack.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
+        
+        rightFront.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+        rightBack.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+        leftFront.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+        leftBack.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+        
+        // Initialize position tracking
+        currentX = 0.0;
+        currentY = 0.0;
+        currentHeading = 0.0;
+        
         // Send telemetry message to indicate successful initialization
         telemetry.addData("Status", "Initialized");
         telemetry.addData("Drive Speed", "%.1f", DRIVE_SPEED);
+        telemetry.addData("Starting Position", "(%.1f, %.1f)", currentX, currentY);
         telemetry.update();
         
         // Wait for the game to start (driver presses START)
         waitForStart();
         runtime.reset();
         
-        // Run autonomous sequence
+        // Run coordinate-based autonomous sequence
         if (opModeIsActive()) {
             
-            // Example autonomous sequence demonstrating mecanum capabilities
-            telemetry.addData("Path", "Starting autonomous sequence");
+            // Coordinate-based autonomous sequence
+            telemetry.addData("Path", "Starting coordinate-based autonomous sequence");
+            telemetry.addData("Target Path", "(0,0) -> (20,20) -> (40,20)");
             telemetry.update();
             
-            // Move forward for 2 seconds
-            driveForward(2.0);
+            // Robot starts at position (0,0)
+            telemetry.addData("Current Position", "(%.1f, %.1f)", currentX, currentY);
+            telemetry.update();
+            sleep(1000);
             
-            // Strafe right for 1.5 seconds
-            strafeRight(1.5);
+            // Move to position (20,20)
+            moveToPosition(20.0, 20.0);
             
-            // Rotate left for 1 second
-            rotateLeft(1.0);
+            // Pause at waypoint
+            sleep(1000);
             
-            // Move backward for 1 second
-            driveBackward(1.0);
-            
-            // Strafe left for 1.5 seconds
-            strafeLeft(1.5);
+            // Move to position (40,20)
+            moveToPosition(40.0, 20.0);
             
             // Stop all motors
             stopAllMotors();
             
             telemetry.addData("Path", "Complete");
+            telemetry.addData("Final Position", "(%.1f, %.1f)", currentX, currentY);
             telemetry.addData("Run Time", "%.1f seconds", runtime.seconds());
             telemetry.update();
         }
@@ -246,5 +277,155 @@ public class FTCPPSampleOpMode extends LinearOpMode {
         
         // Brief pause to ensure motors stop
         sleep(100);
+    }
+    
+    /**
+     * Move robot to specified coordinate position
+     * Uses simple point-to-point movement with mecanum drive
+     */
+    public void moveToPosition(double targetX, double targetY) {
+        telemetry.addData("Movement", "Moving to (%.1f, %.1f)", targetX, targetY);
+        telemetry.addData("From", "(%.1f, %.1f)", currentX, currentY);
+        telemetry.update();
+        
+        // Calculate movement deltas
+        double deltaX = targetX - currentX;
+        double deltaY = targetY - currentY;
+        double distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+        
+        if (distance < 0.5) {
+            // Already at target position
+            telemetry.addData("Status", "Already at target position");
+            telemetry.update();
+            return;
+        }
+        
+        // Calculate movement time based on distance and speed
+        // Assuming 12 inches per second at DRIVE_SPEED = 0.1
+        double movementSpeed = 12.0 * DRIVE_SPEED; // inches per second
+        double movementTime = distance / movementSpeed;
+        
+        // Normalize movement vector
+        double moveX = deltaX / distance;
+        double moveY = deltaY / distance;
+        
+        // Execute movement using mecanum drive kinematics
+        runtime.reset();
+        while (opModeIsActive() && (runtime.seconds() < movementTime)) {
+            // Mecanum drive: combine X and Y movement
+            double frontLeftPower = moveY + moveX;
+            double frontRightPower = moveY - moveX;
+            double backLeftPower = moveY - moveX;
+            double backRightPower = moveY + moveX;
+            
+            // Normalize powers to stay within [-1, 1] range
+            double maxPower = Math.max(Math.max(Math.abs(frontLeftPower), Math.abs(frontRightPower)),
+                                     Math.max(Math.abs(backLeftPower), Math.abs(backRightPower)));
+            if (maxPower > 1.0) {
+                frontLeftPower /= maxPower;
+                frontRightPower /= maxPower;
+                backLeftPower /= maxPower;
+                backRightPower /= maxPower;
+            }
+            
+            // Apply drive speed scaling
+            leftFront.setPower(frontLeftPower * DRIVE_SPEED);
+            rightFront.setPower(frontRightPower * DRIVE_SPEED);
+            leftBack.setPower(backLeftPower * DRIVE_SPEED);
+            rightBack.setPower(backRightPower * DRIVE_SPEED);
+            
+            // Update telemetry
+            telemetry.addData("Target", "(%.1f, %.1f)", targetX, targetY);
+            telemetry.addData("Progress", "%.1f%% (%.1fs/%.1fs)", 
+                            (runtime.seconds() / movementTime) * 100, 
+                            runtime.seconds(), movementTime);
+            telemetry.addData("Distance Remaining", "%.1f inches", 
+                            distance * (1.0 - runtime.seconds() / movementTime));
+            telemetry.update();
+        }
+        
+        // Stop motors
+        stopAllMotors();
+        
+        // Update current position
+        currentX = targetX;
+        currentY = targetY;
+        
+        telemetry.addData("Movement", "Reached position (%.1f, %.1f)", currentX, currentY);
+        telemetry.update();
+        sleep(500); // Brief pause at waypoint
+    }
+    
+    /**
+     * Move robot by specified distance using encoders
+     * More precise than time-based movement
+     */
+    public void moveByDistance(double distanceInches, double direction) {
+        // Calculate target encoder counts
+        int targetCounts = (int)(distanceInches * COUNTS_PER_INCH);
+        
+        // Get current encoder positions
+        int startLeftFront = leftFront.getCurrentPosition();
+        int startRightFront = rightFront.getCurrentPosition();
+        int startLeftBack = leftBack.getCurrentPosition();
+        int startRightBack = rightBack.getCurrentPosition();
+        
+        // Calculate target positions
+        int targetLeftFront = startLeftFront + (int)(targetCounts * Math.sin(Math.toRadians(direction + 45)));
+        int targetRightFront = startRightFront + (int)(targetCounts * Math.sin(Math.toRadians(direction - 45)));
+        int targetLeftBack = startLeftBack + (int)(targetCounts * Math.sin(Math.toRadians(direction - 45)));
+        int targetRightBack = startRightBack + (int)(targetCounts * Math.sin(Math.toRadians(direction + 45)));
+        
+        // Set target positions
+        leftFront.setTargetPosition(targetLeftFront);
+        rightFront.setTargetPosition(targetRightFront);
+        leftBack.setTargetPosition(targetLeftBack);
+        rightBack.setTargetPosition(targetRightBack);
+        
+        // Switch to RUN_TO_POSITION mode
+        leftFront.setMode(DcMotor.RunMode.RUN_TO_POSITION);
+        rightFront.setMode(DcMotor.RunMode.RUN_TO_POSITION);
+        leftBack.setMode(DcMotor.RunMode.RUN_TO_POSITION);
+        rightBack.setMode(DcMotor.RunMode.RUN_TO_POSITION);
+        
+        // Start movement
+        leftFront.setPower(DRIVE_SPEED);
+        rightFront.setPower(DRIVE_SPEED);
+        leftBack.setPower(DRIVE_SPEED);
+        rightBack.setPower(DRIVE_SPEED);
+        
+        // Wait for movement to complete
+        while (opModeIsActive() && 
+               (leftFront.isBusy() || rightFront.isBusy() || leftBack.isBusy() || rightBack.isBusy())) {
+            
+            telemetry.addData("Moving", "Distance: %.1f inches, Direction: %.1f°", 
+                            distanceInches, direction);
+            telemetry.addData("Encoders", "LF:%d RF:%d LB:%d RB:%d",
+                            leftFront.getCurrentPosition(),
+                            rightFront.getCurrentPosition(),
+                            leftBack.getCurrentPosition(),
+                            rightBack.getCurrentPosition());
+            telemetry.update();
+        }
+        
+        // Stop motors and return to RUN_USING_ENCODER mode
+        stopAllMotors();
+        leftFront.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+        rightFront.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+        leftBack.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+        rightBack.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+    }
+    
+    /**
+     * Update robot position based on encoder readings
+     * Simple odometry for position tracking
+     */
+    public void updatePosition() {
+        // This is a simplified position update
+        // In a real implementation, you would use more sophisticated odometry
+        // incorporating all four wheel encoders and IMU data
+        
+        // For now, we'll update position based on the movement commands
+        // This is handled in the moveToPosition method
     }
 }
